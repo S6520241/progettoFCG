@@ -1,0 +1,12 @@
+# Ignora la cartella di build
+build/
+out/
+
+# Ignora i file di configurazione degli IDE (es. VSCode, CLion)
+.vscode/
+.idea/
+*.user
+
+# Ignora eseguibili generati per errore fuori da build
+*.exe
+*.out
