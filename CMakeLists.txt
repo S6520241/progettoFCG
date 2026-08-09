@@ -29,3 +29,7 @@ find_package(OpenGL REQUIRED)
 add_executable(Tappa01 Cartella-Tappa01/main.cpp)
 
 target_link_libraries(Tappa01 PRIVATE common SFML::Graphics SFML::Window SFML::System)
+
+# --- TAPPA 02 ---
+add_executable(Tappa02 Cartella-Tappa02/main.cpp)
+target_link_libraries(Tappa02 PRIVATE common SFML::Graphics SFML::Window SFML::System)
