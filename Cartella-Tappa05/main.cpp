@@ -107,10 +107,9 @@ int main() {
             float dx = mousePos.x - playerPos.x;
             float dy = mousePos.y - playerPos.y;
             float angleRad = std::atan2(dy, dx);
-            // In SFML 3 setRotation accetta esplicitamente radianti o gradi
             player.setRotation(sf::radians(angleRad));
 
-            // 2. Movimento Omnidirezionale (Supporta sia frecce direzionali che WASD)
+            // 2. Movimento Omnidirezionale 
             sf::Vector2f movement(0.f, 0.f);
             if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::Left) || sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A)) {
                 movement.x -= playerSpeed;
@@ -128,7 +127,6 @@ int main() {
 
             // 3. Sistema di collisione Navicella-Bordi 
             sf::Vector2f pos = player.getPosition();
-            // Stimiamo i limiti tenendo conto dell'origine centrale 
             float hw = player.getSize().x / 2.f;
             float hh = player.getSize().y / 2.f;
 
