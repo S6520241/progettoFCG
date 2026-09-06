@@ -58,6 +58,10 @@ target_link_libraries(Tappa07 PRIVATE common SFML::Graphics SFML::Window SFML::S
 add_executable(Tappa08 Cartella-Tappa08/main.cpp)
 target_link_libraries(Tappa08 PRIVATE common SFML::Graphics SFML::Window SFML::System)
 
-# --- TAPPA 08 ---
+# --- TAPPA 09 ---
 add_executable(Tappa09 Cartella-Tappa09/main.cpp)
 target_link_libraries(Tappa09 PRIVATE common SFML::Graphics SFML::Window SFML::System)
+
+# --- TAPPA 10 ---
+add_executable(Tappa10 Cartella-Tappa10/main.cpp)
+target_link_libraries(Tappa10 PRIVATE common SFML::Graphics SFML::Window SFML::System)
