@@ -1,5 +1,6 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Window.hpp>
+#include <SFML/Audio.hpp>
 #include <SFML/System.hpp>
 #include <iostream>
 #include <vector>
@@ -13,7 +14,7 @@ struct Bullet {
 };
 
 struct Enemy {
-    sf::RectangleShape shape;
+    sf::Sprite sprite;
     float speed;
     int hp;
     bool isShooter;
@@ -21,13 +22,21 @@ struct Enemy {
 };
 
 struct PowerUp {
-    sf::RectangleShape shape;
+    sf::Sprite sprite;
+    int type; // 1: Spread Shot, 2: Shield
     sf::Clock lifespan;
 };
 
 struct Star {
     sf::CircleShape shape;
     float speed;
+};
+
+struct Particle {
+    sf::RectangleShape shape;
+    sf::Vector2f velocity;
+    sf::Clock lifeClock;
+    float maxLife;
 };
 
 enum class GameState {
@@ -38,17 +47,41 @@ enum class GameState {
 };
 
 int main() {
-    sf::RenderWindow window(sf::VideoMode({800, 600}), "Space Invaders - Tappa 10 (Finale)");
+    sf::RenderWindow window(sf::VideoMode({800, 600}), "Space Invaders - Tappa Finale");
     window.setFramerateLimit(60);
 
     GameState currentState = GameState::MainMenu;
 
+    // --- CARICAMENTO RISORSE ---
     sf::Font font;
     if (!font.openFromFile("../Cartella-risorse/font.ttf")) {
-        std::cerr << "Errore: Manca ../Cartella-risorse/font.ttf" << std::endl;
+        std::cerr << "Attenzione: Impossibile caricare ../Cartella-risorse/font.ttf" << std::endl;
     }
 
-    // ---UI---
+    sf::Texture playerTex, enemyTex, shooterTex, tankTex, pupSpreadTex, pupShieldTex;
+    bool texturesLoaded = true;
+
+    if (!playerTex.loadFromFile("../Cartella-risorse/player.png") ||
+        !enemyTex.loadFromFile("../Cartella-risorse/enemy.png") ||
+        !shooterTex.loadFromFile("../Cartella-risorse/shooter.png") ||
+        !tankTex.loadFromFile("../Cartella-risorse/tank.png") ||
+        !pupSpreadTex.loadFromFile("../Cartella-risorse/powerup_spread.png") ||
+        !pupShieldTex.loadFromFile("../Cartella-risorse/powerup_shield.png")) {
+        texturesLoaded = false;
+        std::cerr << "Avviso: Impossibile caricare alcune texture." << std::endl;
+    }
+
+    sf::SoundBuffer shootBuffer, explosionBuffer;
+    bool audioLoaded = true;
+    if (!shootBuffer.loadFromFile("../Cartella-risorse/shoot.wav") ||
+        !explosionBuffer.loadFromFile("../Cartella-risorse/explosion.wav")) {
+        audioLoaded = false;
+    }
+    
+    sf::Sound shootSound(shootBuffer);
+    sf::Sound explosionSound(explosionBuffer);
+
+    // --- UI HUD ---
     sf::Text statsText(font);
     statsText.setCharacterSize(20);
     statsText.setFillColor(sf::Color::White);
@@ -59,7 +92,6 @@ int main() {
     timerText.setFillColor(sf::Color::Cyan);
     timerText.setPosition({350.f, 10.f});
 
-    // Testi di servizio 
     sf::Text centerMessage(font);
     centerMessage.setCharacterSize(28);
     centerMessage.setFillColor(sf::Color::Yellow);
@@ -74,6 +106,11 @@ int main() {
     sf::Clock invulnerabilityClock;
     bool isInvulnerable = false;
     
+    // --- SCREEN SHAKE ---
+    sf::Clock shakeClock;
+    float shakeDuration = 0.f;
+    float shakeIntensity = 5.f;
+
     // --- STELLE BACKGROUND ---
     std::vector<Star> stars;
     std::random_device rd;
@@ -92,17 +129,28 @@ int main() {
         stars.push_back(s);
     }
 
-    // --- POWER-UP ---
     std::vector<PowerUp> powerUps;
     sf::Clock powerUpSpawnClock;
     bool hasSpreadShot = false;
+    bool hasShield = false;
     sf::Clock spreadShotTimer;
-    const float powerUpSpawnInterval = 10.0f;
+    
+    sf::CircleShape shieldVisual(50.f);
+    shieldVisual.setFillColor(sf::Color(0, 191, 255, 70));
+    shieldVisual.setOutlineColor(sf::Color::Cyan);
+    shieldVisual.setOutlineThickness(2.f);
+    shieldVisual.setOrigin({50.f, 50.f});
 
-    // --- GIOCATORE E PROIETTILI ---
-    sf::RectangleShape player(sf::Vector2f({50.f, 20.f}));
-    player.setFillColor(sf::Color::Green);
-    player.setOrigin({25.f, 10.f});
+    const float powerUpSpawnInterval = 10.0f;
+    std::vector<Particle> particles;
+
+    // --- GIOCATORE ---
+    sf::Sprite player(playerTex);
+    if (texturesLoaded) {
+        sf::Vector2u pSize = playerTex.getSize();
+        player.setOrigin({static_cast<float>(pSize.x) / 2.f, static_cast<float>(pSize.y) / 2.f});
+        player.setScale({90.f / static_cast<float>(pSize.x), 90.f / static_cast<float>(pSize.y)});
+    }
     player.setPosition({400.f, 300.f});
     const float playerSpeed = 5.0f;
 
@@ -111,7 +159,6 @@ int main() {
     const float bulletSpeed = 15.0f;
     const float enemyBulletSpeed = 7.0f;
 
-    // --- NEMICI ---
     std::vector<Enemy> enemies;
     const float baseEnemySpeed = 2.0f;
     
@@ -119,6 +166,29 @@ int main() {
     std::uniform_real_distribution<float> disY(50.f, 550.f);
     std::uniform_int_distribution<int> disEdge(0, 3);
     std::uniform_int_distribution<int> disEnemyType(1, 100);
+    std::uniform_int_distribution<int> disPowerUpType(1, 2);
+
+    auto triggerShake = [&](float duration) {
+        shakeDuration = duration;
+        shakeClock.restart();
+    };
+
+    auto spawnExplosion = [&](sf::Vector2f pos, sf::Color col) {
+        if (audioLoaded) explosionSound.play();
+        std::uniform_real_distribution<float> disVel(-4.f, 4.f);
+        std::uniform_real_distribution<float> disLife(0.3f, 0.8f);
+        for (int i = 0; i < 12; ++i) {
+            Particle p;
+            p.shape = sf::RectangleShape(sf::Vector2f({6.f, 6.f}));
+            p.shape.setFillColor(col);
+            p.shape.setOrigin({3.f, 3.f});
+            p.shape.setPosition(pos);
+            p.velocity = {disVel(gen), disVel(gen)};
+            p.maxLife = disLife(gen);
+            p.lifeClock.restart();
+            particles.push_back(p);
+        }
+    };
 
     while (window.isOpen()) {
         sf::Vector2i mousePosI = sf::Mouse::getPosition(window);
@@ -135,12 +205,14 @@ int main() {
                     enemyBullets.clear();
                     enemies.clear();
                     powerUps.clear();
+                    particles.clear();
                     killScore = 0;
                     totalScore = 0;
                     lives = 3;
                     hasSpreadShot = false;
+                    hasShield = false;
                     isInvulnerable = false;
-                    player.setFillColor(sf::Color::Green);
+                    player.setColor(sf::Color::White);
                     survivalClock.restart();
                     enemySpawnClock.restart();
                     powerUpSpawnClock.restart();
@@ -156,7 +228,7 @@ int main() {
                 }
                 else if (currentState == GameState::Paused) {
                     if (keyPressed->scancode == sf::Keyboard::Scancode::P) {
-                        currentState = GameState::Gameplay; // Riprende il gioco
+                        currentState = GameState::Gameplay;
                     }
                 }
                 else if (currentState == GameState::GameOver && keyPressed->scancode == sf::Keyboard::Scancode::Enter) {
@@ -166,16 +238,21 @@ int main() {
 
             if (const auto* mousePressed = event->getIf<sf::Event::MouseButtonPressed>()) {
                 if (currentState == GameState::Gameplay && mousePressed->button == sf::Mouse::Button::Left) {
+                    if (audioLoaded) shootSound.play();
                     sf::Vector2f playerPos = player.getPosition();
-                    float baseAngle = std::atan2(mousePos.y - playerPos.y, mousePos.x - playerPos.x);
+                    
+                    float aimAngle = std::atan2(mousePos.y - playerPos.y, mousePos.x - playerPos.x);
+                    float noseOffset = 35.f;
+                    sf::Vector2f nosePos = playerPos + sf::Vector2f(std::cos(aimAngle), std::sin(aimAngle)) * noseOffset;
                     
                     auto spawnBullet = [&](float angleOffset) {
                         Bullet newBullet;
-                        newBullet.shape = sf::RectangleShape(sf::Vector2f({15.f, 5.f}));
+                        newBullet.shape = sf::RectangleShape(sf::Vector2f({16.f, 8.f}));
                         newBullet.shape.setFillColor(sf::Color::Yellow);
-                        newBullet.shape.setOrigin({7.5f, 2.5f});
-                        newBullet.shape.setPosition(playerPos);
-                        float finalAngle = baseAngle + angleOffset;
+                        newBullet.shape.setOrigin({8.f, 4.f});
+                        newBullet.shape.setPosition(nosePos);
+                        
+                        float finalAngle = aimAngle + angleOffset;
                         newBullet.shape.setRotation(sf::radians(finalAngle));
                         newBullet.velocity = { std::cos(finalAngle) * bulletSpeed, std::sin(finalAngle) * bulletSpeed };
                         bullets.push_back(newBullet);
@@ -190,7 +267,6 @@ int main() {
             }
         }
 
-        // Animazione Stelle 
         if (currentState != GameState::Paused) {
             for (auto& star : stars) {
                 star.shape.move({0.f, star.speed});
@@ -202,22 +278,21 @@ int main() {
 
         if (currentState == GameState::Gameplay) {
             float timeElapsed = survivalClock.getElapsedTime().asSeconds();
-            
             int timeBonus = static_cast<int>(timeElapsed * 5.0f);
             totalScore = killScore + timeBonus;
 
             if (isInvulnerable && invulnerabilityClock.getElapsedTime().asSeconds() > 2.0f) {
                 isInvulnerable = false;
-                player.setFillColor(sf::Color::Green);
+                player.setColor(sf::Color::White);
             }
             if (isInvulnerable) {
                 if ((invulnerabilityClock.getElapsedTime().asMilliseconds() / 200) % 2 == 0) 
-                    player.setFillColor(sf::Color(100, 255, 100, 150));
+                    player.setColor(sf::Color(255, 255, 255, 100));
                 else 
-                    player.setFillColor(sf::Color::Green);
+                    player.setColor(sf::Color::White);
             }
 
-            statsText.setString("Vite: " + std::to_string(lives) + "\nScore: " + std::to_string(totalScore));
+            statsText.setString("Vite: " + std::to_string(lives) + "\nScore: " + std::to_string(totalScore) + (hasShield ? " [SCUDO ATTIVO]" : ""));
             
             int minutes = static_cast<int>(timeElapsed) / 60;
             int seconds = static_cast<int>(timeElapsed) % 60;
@@ -227,7 +302,10 @@ int main() {
             if (hasSpreadShot && spreadShotTimer.getElapsedTime().asSeconds() > 5.0f) hasSpreadShot = false;
 
             sf::Vector2f playerPos = player.getPosition();
-            player.setRotation(sf::radians(std::atan2(mousePos.y - playerPos.y, mousePos.x - playerPos.x)));
+            
+            float playerAimAngle = std::atan2(mousePos.y - playerPos.y, mousePos.x - playerPos.x);
+            player.setRotation(sf::radians(playerAimAngle + 1.5707963f));
+            shieldVisual.setPosition(playerPos);
 
             sf::Vector2f movement(0.f, 0.f);
             if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::Left) || sf::Keyboard::isKeyPressed(sf::Keyboard::Key::A)) movement.x -= playerSpeed;
@@ -237,56 +315,66 @@ int main() {
             player.move(movement);
 
             sf::Vector2f pos = player.getPosition();
-            float hw = player.getSize().x / 2.f; float hh = player.getSize().y / 2.f;
-            if (pos.x < hw) pos.x = hw; if (pos.x > 800.f - hw) pos.x = 800.f - hw;
-            if (pos.y < hh) pos.y = hh; if (pos.y > 600.f - hh) pos.y = 600.f - hh;
+            if (pos.x < 35.f) pos.x = 35.f; if (pos.x > 765.f) pos.x = 765.f;
+            if (pos.y < 35.f) pos.y = 35.f; if (pos.y > 565.f) pos.y = 565.f;
             player.setPosition(pos);
 
             float currentSpawnInterval = std::max(0.6f, 2.5f - (timeElapsed * 0.02f));
 
             if (enemySpawnClock.getElapsedTime().asSeconds() > currentSpawnInterval && enemies.size() < 25) {
-                Enemy newEnemy;
                 int typeRoll = disEnemyType(gen);
-                
+                sf::Sprite enemySprite(enemyTex);
+                float eSpeed = baseEnemySpeed + (timeElapsed * 0.01f);
+                int eHp = 1;
+                bool eIsShooter = false;
+                float targetSize = 60.f;
+
                 if (typeRoll <= 15) { 
-                    newEnemy.shape = sf::RectangleShape(sf::Vector2f({30.f, 30.f}));
-                    newEnemy.shape.setFillColor(sf::Color::Yellow);
-                    newEnemy.speed = baseEnemySpeed * 0.8f;
-                    newEnemy.hp = 2;
-                    newEnemy.isShooter = true;
+                    enemySprite = sf::Sprite(shooterTex);
+                    eSpeed = baseEnemySpeed * 0.8f;
+                    eHp = 2;
+                    eIsShooter = true;
+                    targetSize = 60.f;
                 } 
                 else if (typeRoll <= 35) { 
-                    newEnemy.shape = sf::RectangleShape(sf::Vector2f({45.f, 45.f}));
-                    newEnemy.shape.setFillColor(sf::Color(148, 0, 211)); 
-                    newEnemy.speed = baseEnemySpeed * 0.5f;
-                    newEnemy.hp = 3;
-                    newEnemy.isShooter = false;
+                    enemySprite = sf::Sprite(tankTex);
+                    eSpeed = baseEnemySpeed * 0.5f;
+                    eHp = 3;
+                    eIsShooter = false;
+                    targetSize = 85.f;
                 } 
                 else { 
-                    newEnemy.shape = sf::RectangleShape(sf::Vector2f({30.f, 30.f}));
-                    newEnemy.shape.setFillColor(sf::Color::Red);
-                    newEnemy.speed = baseEnemySpeed + (timeElapsed * 0.01f);
-                    newEnemy.hp = 1;
-                    newEnemy.isShooter = false;
+                    enemySprite = sf::Sprite(enemyTex);
+                    eSpeed = baseEnemySpeed + (timeElapsed * 0.01f);
+                    eHp = 1;
+                    eIsShooter = false;
+                    targetSize = 60.f;
                 }
-                newEnemy.shape.setOrigin({newEnemy.shape.getSize().x/2.f, newEnemy.shape.getSize().y/2.f});
+                
+                if (texturesLoaded) {
+                    sf::Vector2u eSize = enemySprite.getTexture().getSize();
+                    enemySprite.setOrigin({static_cast<float>(eSize.x) / 2.f, static_cast<float>(eSize.y) / 2.f});
+                    enemySprite.setScale({targetSize / static_cast<float>(eSize.x), targetSize / static_cast<float>(eSize.y)});
+                }
 
                 int edge = disEdge(gen);
                 float spawnX = 0, spawnY = 0;
                 switch (edge) {
-                    case 0: spawnX = disX(gen); spawnY = -40.f; break;
-                    case 1: spawnX = 840.f; spawnY = disY(gen); break;
-                    case 2: spawnX = disX(gen); spawnY = 640.f; break;
-                    case 3: spawnX = -40.f; spawnY = disY(gen); break;
+                    case 0: spawnX = disX(gen); spawnY = -50.f; break;
+                    case 1: spawnX = 850.f; spawnY = disY(gen); break;
+                    case 2: spawnX = disX(gen); spawnY = 650.f; break;
+                    case 3: spawnX = -50.f; spawnY = disY(gen); break;
                 }
-                newEnemy.shape.setPosition({spawnX, spawnY});
+                enemySprite.setPosition({spawnX, spawnY});
+                
+                Enemy newEnemy{ enemySprite, eSpeed, eHp, eIsShooter, sf::Clock() };
                 newEnemy.shootClock.restart();
                 enemies.push_back(newEnemy);
                 enemySpawnClock.restart();
             }
 
             for (auto& enemy : enemies) {
-                sf::Vector2f ePos = enemy.shape.getPosition();
+                sf::Vector2f ePos = enemy.sprite.getPosition();
                 sf::Vector2f dirToPlayer = player.getPosition() - ePos;
                 float dist = std::sqrt(dirToPlayer.x * dirToPlayer.x + dirToPlayer.y * dirToPlayer.y);
                 
@@ -298,49 +386,77 @@ int main() {
                         eb.shape.setOrigin({5.f, 5.f});
                         eb.shape.setPosition(ePos);
                         float eAngle = std::atan2(dirToPlayer.y, dirToPlayer.x);
+                        eb.shape.setRotation(sf::radians(eAngle));
                         eb.velocity = { std::cos(eAngle) * enemyBulletSpeed, std::sin(eAngle) * enemyBulletSpeed };
                         enemyBullets.push_back(eb);
                         enemy.shootClock.restart();
                     }
                 } else if (dist > 0) {
-                    enemy.shape.move({(dirToPlayer.x / dist) * enemy.speed, (dirToPlayer.y / dist) * enemy.speed});
+                    enemy.sprite.move({(dirToPlayer.x / dist) * enemy.speed, (dirToPlayer.y / dist) * enemy.speed});
                 }
-                enemy.shape.setRotation(sf::radians(std::atan2(dirToPlayer.y, dirToPlayer.x)));
+                enemy.sprite.setRotation(sf::radians(std::atan2(dirToPlayer.y, dirToPlayer.x) + 1.5707963f));
             }
 
             if (powerUpSpawnClock.getElapsedTime().asSeconds() > powerUpSpawnInterval) {
-                PowerUp pup;
-                pup.shape = sf::RectangleShape(sf::Vector2f({20.f, 20.f}));
-                pup.shape.setFillColor(sf::Color::Cyan);
-                pup.shape.setPosition({disX(gen), disY(gen)});
+                int pType = disPowerUpType(gen);
+                sf::Sprite pupSprite(pType == 1 ? pupSpreadTex : pupShieldTex);
+                if (texturesLoaded) {
+                    sf::Vector2u pSize = pupSprite.getTexture().getSize();
+                    pupSprite.setOrigin({static_cast<float>(pSize.x) / 2.f, static_cast<float>(pSize.y) / 2.f});
+                    pupSprite.setScale({40.f / static_cast<float>(pSize.x), 40.f / static_cast<float>(pSize.y)});
+                }
+                pupSprite.setPosition({disX(gen), disY(gen)});
+                
+                PowerUp pup{ pupSprite, pType, sf::Clock() };
                 pup.lifespan.restart();
                 powerUps.push_back(pup);
                 powerUpSpawnClock.restart();
             }
 
             for (auto it = powerUps.begin(); it != powerUps.end(); ) {
-                if (player.getGlobalBounds().findIntersection(it->shape.getGlobalBounds())) {
-                    hasSpreadShot = true;
-                    spreadShotTimer.restart();
+                if (player.getGlobalBounds().findIntersection(it->sprite.getGlobalBounds())) {
+                    if (it->type == 1) {
+                        hasSpreadShot = true;
+                        spreadShotTimer.restart();
+                    } else {
+                        hasShield = true;
+                    }
                     it = powerUps.erase(it);
                 } else if (it->lifespan.getElapsedTime().asSeconds() > 7.0f) {
                     it = powerUps.erase(it);
                 } else ++it;
             }
 
+            for (auto pIt = particles.begin(); pIt != particles.end(); ) {
+                pIt->shape.move(pIt->velocity);
+                if (pIt->lifeClock.getElapsedTime().asSeconds() > pIt->maxLife) {
+                    pIt = particles.erase(pIt);
+                } else {
+                    ++pIt;
+                }
+            }
+
+            auto handlePlayerDamage = [&]() {
+                if (hasShield) {
+                    hasShield = false;
+                    triggerShake(0.3f);
+                } else if (!isInvulnerable) {
+                    lives -= 1;
+                    isInvulnerable = true;
+                    invulnerabilityClock.restart();
+                    triggerShake(0.4f);
+                    if (lives <= 0) {
+                        currentState = GameState::GameOver;
+                        finalTimeRecorded = survivalClock.getElapsedTime().asSeconds();
+                    }
+                }
+            };
+
             for (auto it = enemyBullets.begin(); it != enemyBullets.end(); ) {
                 it->shape.move(it->velocity);
                 bool hit = false;
                 if (player.getGlobalBounds().findIntersection(it->shape.getGlobalBounds())) {
-                    if (!isInvulnerable) {
-                        lives -= 1;
-                        isInvulnerable = true;
-                        invulnerabilityClock.restart();
-                        if (lives <= 0) {
-                            currentState = GameState::GameOver;
-                            finalTimeRecorded = survivalClock.getElapsedTime().asSeconds();
-                        }
-                    }
+                    handlePlayerDamage();
                     hit = true;
                 }
                 sf::Vector2f bPos = it->shape.getPosition();
@@ -353,13 +469,14 @@ int main() {
                 bool bulletDestroyed = false;
 
                 for (auto eIt = enemies.begin(); eIt != enemies.end(); ) {
-                    if (it->shape.getGlobalBounds().findIntersection(eIt->shape.getGlobalBounds())) {
+                    if (it->shape.getGlobalBounds().findIntersection(eIt->sprite.getGlobalBounds())) {
                         eIt->hp -= 1;
                         bulletDestroyed = true;
                         
                         if (eIt->hp <= 0) {
+                            spawnExplosion(eIt->sprite.getPosition(), eIt->isShooter ? sf::Color::Yellow : sf::Color::Red);
                             if (eIt->isShooter) killScore += 20;
-                            else if (eIt->shape.getFillColor() == sf::Color::Red) killScore += 10;
+                            else if (eIt->speed > 2.5f) killScore += 10;
                             else killScore += 30;
                             eIt = enemies.erase(eIt);
                         }
@@ -374,22 +491,24 @@ int main() {
             }
 
             for (auto eIt = enemies.begin(); eIt != enemies.end(); ) {
-                if (player.getGlobalBounds().findIntersection(eIt->shape.getGlobalBounds())) {
-                    if (!isInvulnerable) {
-                        lives -= 1;
-                        isInvulnerable = true;
-                        invulnerabilityClock.restart();
-                        if (lives <= 0) {
-                            currentState = GameState::GameOver;
-                            finalTimeRecorded = survivalClock.getElapsedTime().asSeconds();
-                        }
-                    }
+                if (player.getGlobalBounds().findIntersection(eIt->sprite.getGlobalBounds())) {
+                    spawnExplosion(eIt->sprite.getPosition(), sf::Color::Red);
+                    handlePlayerDamage();
                     eIt = enemies.erase(eIt); 
                 } else ++eIt;
             }
         }
 
         // --- RENDERING ---
+        sf::View view = window.getDefaultView();
+        if (shakeClock.getElapsedTime().asSeconds() < shakeDuration) {
+            std::uniform_real_distribution<float> disShake(-shakeIntensity, shakeIntensity);
+            view.setCenter({400.f + disShake(gen), 300.f + disShake(gen)});
+        } else {
+            view.setCenter({400.f, 300.f});
+        }
+        window.setView(view);
+
         window.clear(sf::Color::Black);
         
         switch (currentState) {
@@ -400,11 +519,16 @@ int main() {
             case GameState::Gameplay:
             case GameState::Paused:
                 for (const auto& star : stars) window.draw(star.shape);
-                for (const auto& pup : powerUps) window.draw(pup.shape);
+                for (const auto& pup : powerUps) window.draw(pup.sprite);
                 for (const auto& bullet : enemyBullets) window.draw(bullet.shape);
                 for (const auto& bullet : bullets) window.draw(bullet.shape);
-                for (const auto& enemy : enemies) window.draw(enemy.shape);
+                for (const auto& enemy : enemies) window.draw(enemy.sprite);
+                
+                if (hasShield) window.draw(shieldVisual);
                 window.draw(player);
+
+                for (const auto& p : particles) window.draw(p.shape);
+
                 window.draw(statsText);
                 window.draw(timerText);
 
