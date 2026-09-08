@@ -1,0 +1,26 @@
+Relazione Progetto: Arcade 2D
+
+Corso: Fondamenti di Computer Grafica - Università di Genova
+Studente: Francesco Giuseppino
+
+1. Obiettivo del Progetto
+Sviluppo di un videogioco arcade 2D a scorrimento verticale in C++, utilizzando
+esclusivamente la libreria SFML 3.0. L'architettura è stata sviluppata in 11 tappe
+incrementali per testare e implementare gradualmente le funzionalità.
+2. Sintesi dello Sviluppo (Tappe)
+Tappe 1-4 (Setup e Movimento): Inizializzazione della finestra di gioco, gestione
+degli input da tastiera, caricamento di sprite/texture e sistema per bloccare il
+movimento della navicella entro i bordi dello schermo.
+Tappe 5-7 (Combattimento e Collisioni): Implementazione dello sparo, spawn
+procedurale dei nemici dall'alto dello schermo e gestione delle collisioni AABB (Axis-
+Aligned Bounding Box) per i calcoli di danno e distruzione.
+Tappe 8-11 (Feedback e Stati): Aggiunta di interfaccia a schermo (punteggio e vite),
+effetti sonori/musica, animazioni delle esplosioni (sprite-sheet temporizzato) e
+macchina a stati del gioco (Menu principale, Pausa, Game Over).
+3. Problemi Tecnici e Soluzioni
+Memory Leak dei proiettili: I proiettili e i nemici si accumulavano in memoria una
+volta usciti dallo schermo. Risolto implementando l'eliminazione dalla coda vettoriale
+degli oggetti non più visibili.
+Percorsi delle Risorse: Per garantire l'avvio multipiattaforma e da terminale, i
+caricamenti di file esterni sono stati unificati utilizzando un percorso relativo fisso
+(../Cartella-risorse/).
